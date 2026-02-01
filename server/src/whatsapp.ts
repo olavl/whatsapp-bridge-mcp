@@ -80,6 +80,8 @@ export class WhatsAppManager {
   private qrServer: Server | null = null;
   private qrServerPort = 3456;
   private sentMessageIds = new Set<string>(); // Track messages we sent via MCP
+  private lastCheckedTimestamp = 0; // For check_inbox tracking
+  private inboxMessages: Message[] = []; // Unread messages queue
 
   constructor(authDir?: string) {
     const defaultDir = join(homedir(), '.whatsapp-bridge');
@@ -210,6 +212,9 @@ export class WhatsAppManager {
         continue;
       }
 
+      // Add to inbox for check_inbox tool
+      this.inboxMessages.push(storedMsg);
+
       // Check for pending reply - always use wildcard since JID formats vary
       const pending = this.pendingReplies.get('__any__');
       if (pending) {
@@ -219,6 +224,13 @@ export class WhatsAppManager {
         continue;
       }
     }
+  }
+
+  checkInbox(): Message[] {
+    // Return and clear all unread messages
+    const messages = [...this.inboxMessages];
+    this.inboxMessages = [];
+    return messages;
   }
 
   private extractMessageText(msg: WAMessage): string | null {

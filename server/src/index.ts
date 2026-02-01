@@ -135,6 +135,14 @@ async function main() {
             properties: {},
           },
         },
+        {
+          name: 'check_inbox',
+          description: 'Check for new incoming WhatsApp messages (user-initiated). Returns any messages received since last check.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
       ],
     };
   });
@@ -295,6 +303,32 @@ async function main() {
             content: [{
               type: 'text',
               text: result.message,
+            }],
+          };
+        }
+
+        case 'check_inbox': {
+          const messages = whatsapp.checkInbox();
+
+          if (messages.length === 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'No new messages.',
+              }],
+            };
+          }
+
+          const messageList = messages.map(msg => {
+            const time = new Date(msg.timestamp).toLocaleTimeString();
+            const sender = msg.senderName || msg.sender.split('@')[0];
+            return `[${time}] ${sender}: ${msg.text}`;
+          }).join('\n');
+
+          return {
+            content: [{
+              type: 'text',
+              text: `New messages:\n\n${messageList}`,
             }],
           };
         }
