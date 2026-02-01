@@ -13,10 +13,11 @@ import makeWASocket, {
   type BaileysEventMap,
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
-import { mkdir } from 'fs/promises';
+import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { createServer, type Server } from 'http';
 
 export interface Chat {
   id: string;
@@ -75,6 +76,8 @@ export class WhatsAppManager {
   private recentChats = new Map<string, { name: string; lastTime: number }>();
   private recentMessages: Message[] = [];
   private maxStoredMessages = 100;
+  private qrServer: Server | null = null;
+  private qrServerPort = 3456;
 
   constructor(authDir?: string) {
     const defaultDir = join(homedir(), '.whatsapp-bridge');
@@ -149,6 +152,7 @@ export class WhatsAppManager {
       this.reconnectAttempts = 0;
       this.currentQR = null;
       this.lastActivity = Date.now();
+      this.stopQRServer(); // Stop QR server once connected
 
       // Get phone number from socket
       const user = this.sock?.user;
@@ -343,17 +347,155 @@ export class WhatsAppManager {
     };
   }
 
-  showQRCode(): string | null {
-    if (this.currentQR) {
-      qrcode.generate(this.currentQR, { small: true });
-      return this.currentQR;
-    }
-
+  async showQRCode(): Promise<{ url?: string; message: string }> {
     if (this.connected) {
-      return 'Already connected - no QR code needed';
+      return { message: 'Already connected - no QR code needed' };
     }
 
-    return null;
+    if (!this.currentQR) {
+      return { message: 'No QR code available yet. Try again in a few seconds.' };
+    }
+
+    // Start HTTP server to display QR code
+    await this.startQRServer();
+
+    const url = `http://localhost:${this.qrServerPort}`;
+    return {
+      url,
+      message: `QR code available at ${url} - open in browser and scan with WhatsApp`,
+    };
+  }
+
+  private async startQRServer(): Promise<void> {
+    if (this.qrServer) {
+      return; // Already running
+    }
+
+    this.qrServer = createServer((req, res) => {
+      if (this.connected) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`
+          <!DOCTYPE html>
+          <html>
+          <head><title>WhatsApp Bridge</title></head>
+          <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:system-ui;background:#25D366;color:white;">
+            <div style="text-align:center;">
+              <h1>✓ Connected!</h1>
+              <p>WhatsApp is now linked. You can close this page.</p>
+            </div>
+          </body>
+          </html>
+        `);
+        return;
+      }
+
+      if (!this.currentQR) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`
+          <!DOCTYPE html>
+          <html>
+          <head><title>WhatsApp Bridge</title><meta http-equiv="refresh" content="2"></head>
+          <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:system-ui;">
+            <div style="text-align:center;">
+              <h1>Waiting for QR code...</h1>
+              <p>This page will refresh automatically.</p>
+            </div>
+          </body>
+          </html>
+        `);
+        return;
+      }
+
+      // Generate QR code as HTML using Unicode blocks
+      let qrHtml = '';
+      qrcode.generate(this.currentQR, { small: true }, (qr: string) => {
+        qrHtml = qr;
+      });
+
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>WhatsApp Bridge - Scan QR</title>
+          <meta http-equiv="refresh" content="5">
+          <style>
+            body {
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              height: 100vh;
+              font-family: system-ui;
+              background: #f0f0f0;
+              margin: 0;
+            }
+            .container {
+              background: white;
+              padding: 40px;
+              border-radius: 16px;
+              box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+              text-align: center;
+            }
+            h1 { color: #25D366; margin-bottom: 10px; }
+            pre {
+              background: white;
+              padding: 20px;
+              font-size: 8px;
+              line-height: 1;
+              letter-spacing: 0;
+            }
+            .instructions {
+              margin-top: 20px;
+              color: #666;
+            }
+            .instructions ol {
+              text-align: left;
+              display: inline-block;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>WhatsApp Bridge</h1>
+            <p>Scan this QR code with WhatsApp</p>
+            <pre>${qrHtml.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+            <div class="instructions">
+              <ol>
+                <li>Open WhatsApp on your phone</li>
+                <li>Go to Settings → Linked Devices</li>
+                <li>Tap "Link a Device"</li>
+                <li>Scan this QR code</li>
+              </ol>
+            </div>
+          </div>
+        </body>
+        </html>
+      `);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.qrServer!.listen(this.qrServerPort, () => {
+        console.error(`[WhatsApp] QR server running at http://localhost:${this.qrServerPort}`);
+        resolve();
+      });
+      this.qrServer!.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          // Port already in use, try next port
+          this.qrServerPort++;
+          this.qrServer = null;
+          this.startQRServer().then(resolve).catch(reject);
+        } else {
+          reject(err);
+        }
+      });
+    });
+  }
+
+  private stopQRServer(): void {
+    if (this.qrServer) {
+      this.qrServer.close();
+      this.qrServer = null;
+    }
   }
 
   private normalizeRecipient(recipient: string): string {

@@ -286,43 +286,29 @@ async function main() {
         }
 
         case 'show_qr_code': {
-          const result = whatsapp.showQRCode();
-
-          if (result === null) {
-            // Try reconnecting to get a new QR
+          // Try reconnecting if not connected
+          if (!whatsapp.isConnected()) {
             try {
               await whatsapp.connect();
-              const newResult = whatsapp.showQRCode();
-              if (newResult && newResult !== 'Already connected - no QR code needed') {
-                return {
-                  content: [{
-                    type: 'text',
-                    text: 'QR code displayed in terminal. Scan it with WhatsApp (Settings > Linked Devices > Link a Device).',
-                  }],
-                };
-              }
             } catch (e) {
-              // Ignore reconnection errors
+              // Continue anyway - QR might still be available
             }
-
-            return {
-              content: [{
-                type: 'text',
-                text: 'No QR code available. Either already connected or waiting for WhatsApp servers.',
-              }],
-            };
           }
 
-          if (result === 'Already connected - no QR code needed') {
-            return {
-              content: [{ type: 'text', text: result }],
-            };
+          const result = await whatsapp.showQRCode();
+
+          if (result.url) {
+            // Try to open browser
+            const { exec } = await import('child_process');
+            const openCmd = process.platform === 'darwin' ? 'open' :
+                           process.platform === 'win32' ? 'start' : 'xdg-open';
+            exec(`${openCmd} ${result.url}`);
           }
 
           return {
             content: [{
               type: 'text',
-              text: 'QR code displayed in terminal. Scan it with WhatsApp (Settings > Linked Devices > Link a Device).',
+              text: result.message,
             }],
           };
         }
