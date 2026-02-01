@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "Send and receive WhatsApp messages from Claude Code",
+  "author": {
+    "name": "olavl",
+    "url": "https://github.com/olavl"
+  },
+  "repository": "https://github.com/olavl/whatsapp-bridge-mcp",
+  "license": "MIT",
+  "keywords": ["whatsapp", "messaging", "chat", "notifications"],
+  "skills": "./skills",
+  "mcpServers": {
+    "whatsapp": {
+      "command": "bun",
+      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}/server", "start"],
+      "env": {
+        "WHATSAPP_AUTH_DIR": "${WHATSAPP_AUTH_DIR:-~/.whatsapp-bridge}",
+        "WHATSAPP_DEFAULT_RECIPIENT": "${WHATSAPP_DEFAULT_RECIPIENT}"
+      }
+    }
+  }
+}
