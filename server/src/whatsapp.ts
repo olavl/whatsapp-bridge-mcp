@@ -5,7 +5,8 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-  makeInMemoryStore,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
   type WASocket,
   type ConnectionState,
   type WAMessage,
@@ -48,9 +49,20 @@ interface PendingReply {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+// Simple logger that suppresses Baileys noise
+const silentLogger = {
+  level: 'silent' as const,
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  fatal: () => {},
+  child: () => silentLogger,
+};
+
 export class WhatsAppManager {
   private sock: WASocket | null = null;
-  private store = makeInMemoryStore({});
   private authDir: string;
   private pendingReplies = new Map<string, PendingReply>();
   private currentQR: string | null = null;
@@ -60,6 +72,9 @@ export class WhatsAppManager {
   private lastSentChatId: string | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private recentChats = new Map<string, { name: string; lastTime: number }>();
+  private recentMessages: Message[] = [];
+  private maxStoredMessages = 100;
 
   constructor(authDir?: string) {
     const defaultDir = join(homedir(), '.whatsapp-bridge');
@@ -73,17 +88,20 @@ export class WhatsAppManager {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+    const { version } = await fetchLatestBaileysVersion();
 
     this.sock = makeWASocket({
-      auth: state,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, silentLogger as any),
+      },
+      version,
+      logger: silentLogger as any,
       printQRInTerminal: false,
       browser: ['WhatsApp Bridge', 'Chrome', '120.0.0'],
       syncFullHistory: false,
       markOnlineOnConnect: false,
     });
-
-    // Bind store to socket events
-    this.store.bind(this.sock.ev);
 
     // Handle connection updates
     this.sock.ev.on('connection.update', (update: Partial<ConnectionState>) => {
@@ -145,35 +163,59 @@ export class WhatsAppManager {
     const { messages, type } = m;
 
     for (const msg of messages) {
-      // Skip non-notify messages and messages from self
-      if (type !== 'notify' || msg.key.fromMe) continue;
-
       const chatId = msg.key.remoteJid;
       if (!chatId) continue;
 
+      // Store chat info
+      const pushName = msg.pushName || chatId.split('@')[0];
+      this.recentChats.set(chatId, {
+        name: pushName,
+        lastTime: Date.now(),
+      });
+
+      // Skip non-notify messages for reply handling
+      if (type !== 'notify') continue;
+
       this.lastActivity = Date.now();
+
+      const text = this.extractMessageText(msg);
+      if (!text) continue;
+
+      // Store message
+      const storedMsg: Message = {
+        id: msg.key.id || 'unknown',
+        chatId,
+        sender: msg.key.participant || chatId,
+        senderName: msg.pushName,
+        text,
+        timestamp: Number(msg.messageTimestamp) * 1000 || Date.now(),
+        fromMe: msg.key.fromMe || false,
+      };
+
+      this.recentMessages.push(storedMsg);
+      if (this.recentMessages.length > this.maxStoredMessages) {
+        this.recentMessages.shift();
+      }
+
+      // Skip messages from self for reply handling
+      if (msg.key.fromMe) continue;
 
       // Check if we're waiting for a reply from this chat
       const pending = this.pendingReplies.get(chatId);
       if (pending) {
-        const text = this.extractMessageText(msg);
-        if (text) {
-          clearTimeout(pending.timeout);
-          this.pendingReplies.delete(chatId);
-          pending.resolve(text);
-        }
+        clearTimeout(pending.timeout);
+        this.pendingReplies.delete(chatId);
+        pending.resolve(text);
+        continue;
       }
 
       // Also check if we're waiting for any reply (using last sent chat)
       if (this.lastSentChatId && chatId === this.lastSentChatId) {
         const anyPending = this.pendingReplies.get('__any__');
         if (anyPending) {
-          const text = this.extractMessageText(msg);
-          if (text) {
-            clearTimeout(anyPending.timeout);
-            this.pendingReplies.delete('__any__');
-            anyPending.resolve(text);
-          }
+          clearTimeout(anyPending.timeout);
+          this.pendingReplies.delete('__any__');
+          anyPending.resolve(text);
         }
       }
     }
@@ -216,6 +258,7 @@ export class WhatsAppManager {
 
   async sendMessage(recipient: string, message: string): Promise<{ messageId: string; timestamp: number }> {
     if (!this.sock) throw new Error('WhatsApp not connected');
+    if (!this.connected) throw new Error('WhatsApp not connected - use show_qr_code to authenticate');
 
     // Normalize phone number to JID format
     const jid = this.normalizeRecipient(recipient);
@@ -232,7 +275,7 @@ export class WhatsAppManager {
   }
 
   async waitForReply(chatId?: string, timeoutMs: number = 300000): Promise<string> {
-    const targetChatId = chatId || this.lastSentChatId;
+    const targetChatId = chatId ? this.normalizeRecipient(chatId) : this.lastSentChatId;
 
     if (!targetChatId) {
       throw new Error('No chat specified and no recent message sent');
@@ -266,50 +309,30 @@ export class WhatsAppManager {
   }
 
   async listChats(limit: number = 20): Promise<Chat[]> {
-    if (!this.sock) throw new Error('WhatsApp not connected');
+    const chats: Chat[] = [];
 
-    const chats = this.store.chats.all();
+    const sorted = [...this.recentChats.entries()]
+      .sort((a, b) => b[1].lastTime - a[1].lastTime)
+      .slice(0, limit);
 
-    return chats
-      .slice(0, limit)
-      .map(chat => ({
-        id: chat.id,
-        name: chat.name || chat.id.split('@')[0],
-        lastMessage: undefined, // Would need message history
-        lastMessageTime: chat.conversationTimestamp
-          ? Number(chat.conversationTimestamp) * 1000
-          : undefined,
-        unreadCount: chat.unreadCount || 0,
-      }));
+    for (const [id, info] of sorted) {
+      chats.push({
+        id,
+        name: info.name,
+        lastMessageTime: info.lastTime,
+        unreadCount: 0,
+      });
+    }
+
+    return chats;
   }
 
   async getMessages(chatId: string, limit: number = 10): Promise<Message[]> {
-    if (!this.sock) throw new Error('WhatsApp not connected');
-
     const jid = this.normalizeRecipient(chatId);
-    const messages = this.store.messages[jid];
 
-    if (!messages) return [];
-
-    const result: Message[] = [];
-    const allMessages = messages.array.slice(-limit);
-
-    for (const msg of allMessages) {
-      const text = this.extractMessageText(msg);
-      if (text) {
-        result.push({
-          id: msg.key.id || 'unknown',
-          chatId: jid,
-          sender: msg.key.participant || msg.key.remoteJid || 'unknown',
-          senderName: msg.pushName,
-          text,
-          timestamp: Number(msg.messageTimestamp) * 1000,
-          fromMe: msg.key.fromMe || false,
-        });
-      }
-    }
-
-    return result;
+    return this.recentMessages
+      .filter(msg => msg.chatId === jid)
+      .slice(-limit);
   }
 
   getAuthStatus(): AuthStatus {
