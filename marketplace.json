@@ -1,0 +1,15 @@
+{
+  "name": "whatsapp-bridge-marketplace",
+  "owner": {
+    "name": "olavl",
+    "url": "https://github.com/olavl"
+  },
+  "plugins": [
+    {
+      "name": "whatsapp-bridge",
+      "source": "./",
+      "description": "Send and receive WhatsApp messages from Claude Code",
+      "version": "1.0.0"
+    }
+  ]
+}
