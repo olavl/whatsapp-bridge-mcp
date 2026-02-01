@@ -210,21 +210,12 @@ export class WhatsAppManager {
         continue;
       }
 
-      // Check if we're waiting for a reply from this chat
-      const pending = this.pendingReplies.get(chatId);
+      // Check for pending reply - always use wildcard since JID formats vary
+      const pending = this.pendingReplies.get('__any__');
       if (pending) {
         clearTimeout(pending.timeout);
-        this.pendingReplies.delete(chatId);
-        pending.resolve(text);
-        continue;
-      }
-
-      // Check for any pending reply (wildcard) - accepts reply from ANY chat
-      const anyPending = this.pendingReplies.get('__any__');
-      if (anyPending) {
-        clearTimeout(anyPending.timeout);
         this.pendingReplies.delete('__any__');
-        anyPending.resolve(text);
+        pending.resolve(text);
         continue;
       }
     }
@@ -290,14 +281,9 @@ export class WhatsAppManager {
   }
 
   async waitForReply(chatId?: string, timeoutMs: number = 300000): Promise<string> {
-    const targetChatId = chatId ? this.normalizeRecipient(chatId) : this.lastSentChatId;
-
-    if (!targetChatId) {
-      throw new Error('No chat specified and no recent message sent');
-    }
-
-    // Use special key for "any" reply if no specific chat
-    const waitKey = chatId ? this.normalizeRecipient(chatId) : '__any__';
+    // Always use wildcard - WhatsApp uses different JID formats
+    // (@s.whatsapp.net vs @lid) so we can't reliably match chat IDs
+    const waitKey = '__any__';
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -306,7 +292,7 @@ export class WhatsAppManager {
       }, timeoutMs);
 
       this.pendingReplies.set(waitKey, {
-        chatId: targetChatId,
+        chatId: chatId || 'any',
         resolve,
         reject,
         timeout,
