@@ -10,7 +10,6 @@
   "license": "MIT",
   "keywords": ["whatsapp", "messaging", "chat", "notifications"],
   "skills": "./skills",
-  "hooks": "./hooks/hooks.json",
   "mcpServers": {
     "whatsapp": {
       "command": "bun",
