@@ -214,14 +214,13 @@ export class WhatsAppManager {
         continue;
       }
 
-      // Also check if we're waiting for any reply (using last sent chat)
-      if (this.lastSentChatId && chatId === this.lastSentChatId) {
-        const anyPending = this.pendingReplies.get('__any__');
-        if (anyPending) {
-          clearTimeout(anyPending.timeout);
-          this.pendingReplies.delete('__any__');
-          anyPending.resolve(text);
-        }
+      // Check for any pending reply (wildcard) - accepts reply from ANY chat
+      const anyPending = this.pendingReplies.get('__any__');
+      if (anyPending) {
+        clearTimeout(anyPending.timeout);
+        this.pendingReplies.delete('__any__');
+        anyPending.resolve(text);
+        continue;
       }
     }
   }
