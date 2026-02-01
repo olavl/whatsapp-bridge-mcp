@@ -14,7 +14,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import QRCode from 'qrcode';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -215,6 +215,9 @@ export class WhatsAppManager {
       // Add to inbox for check_inbox tool
       this.inboxMessages.push(storedMsg);
 
+      // Write to pending file for hook notification
+      this.writePendingFile(storedMsg);
+
       // Check for pending reply - always use wildcard since JID formats vary
       const pending = this.pendingReplies.get('__any__');
       if (pending) {
@@ -230,7 +233,42 @@ export class WhatsAppManager {
     // Return and clear all unread messages
     const messages = [...this.inboxMessages];
     this.inboxMessages = [];
+    // Clear the pending file since we've read them
+    this.clearPendingFile();
     return messages;
+  }
+
+  private async writePendingFile(msg: Message): Promise<void> {
+    try {
+      const pendingPath = join(this.authDir, 'pending_messages.json');
+      let pending: any[] = [];
+
+      try {
+        const existing = await readFile(pendingPath, 'utf-8');
+        pending = JSON.parse(existing);
+      } catch {
+        // File doesn't exist or invalid JSON
+      }
+
+      pending.push({
+        time: new Date(msg.timestamp).toLocaleTimeString(),
+        sender: msg.senderName || msg.sender.split('@')[0],
+        text: msg.text,
+      });
+
+      await writeFile(pendingPath, JSON.stringify(pending, null, 2));
+    } catch (err) {
+      console.error('[WhatsApp] Failed to write pending file:', err);
+    }
+  }
+
+  private async clearPendingFile(): Promise<void> {
+    try {
+      const pendingPath = join(this.authDir, 'pending_messages.json');
+      await writeFile(pendingPath, '[]');
+    } catch {
+      // Ignore
+    }
   }
 
   private extractMessageText(msg: WAMessage): string | null {
