@@ -79,6 +79,7 @@ export class WhatsAppManager {
   private maxStoredMessages = 100;
   private qrServer: Server | null = null;
   private qrServerPort = 3456;
+  private sentMessageIds = new Set<string>(); // Track messages we sent via MCP
 
   constructor(authDir?: string) {
     const defaultDir = join(homedir(), '.whatsapp-bridge');
@@ -202,8 +203,12 @@ export class WhatsAppManager {
         this.recentMessages.shift();
       }
 
-      // Skip messages from self for reply handling
-      if (msg.key.fromMe) continue;
+      // Skip messages that WE sent via this MCP server (not phone replies)
+      const msgId = msg.key.id || '';
+      if (this.sentMessageIds.has(msgId)) {
+        this.sentMessageIds.delete(msgId); // Clean up
+        continue;
+      }
 
       // Check if we're waiting for a reply from this chat
       const pending = this.pendingReplies.get(chatId);
@@ -269,11 +274,17 @@ export class WhatsAppManager {
 
     const result = await this.sock.sendMessage(jid, { text: message });
 
+    // Track this message ID so we don't capture it as a reply
+    const messageId = result?.key.id || 'unknown';
+    if (messageId !== 'unknown') {
+      this.sentMessageIds.add(messageId);
+    }
+
     this.lastSentChatId = jid;
     this.lastActivity = Date.now();
 
     return {
-      messageId: result?.key.id || 'unknown',
+      messageId,
       timestamp: Date.now(),
     };
   }
