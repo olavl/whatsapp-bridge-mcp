@@ -21,21 +21,7 @@ async function main() {
   // Create WhatsApp manager
   const whatsapp = new WhatsAppManager(authDir);
 
-  // Start connection (will wait for QR if needed)
-  try {
-    await whatsapp.connect();
-    const status = whatsapp.getAuthStatus();
-    if (status.connected) {
-      console.error(`[WhatsApp Bridge] Connected as +${status.phoneNumber}`);
-    } else {
-      console.error('[WhatsApp Bridge] Waiting for authentication - use show_qr_code tool');
-    }
-  } catch (error) {
-    console.error('[WhatsApp Bridge] Initial connection attempt:', error instanceof Error ? error.message : error);
-    console.error('[WhatsApp Bridge] Use show_qr_code tool to authenticate');
-  }
-
-  // Create MCP server
+  // Create MCP server FIRST (don't block on WhatsApp connection)
   const mcpServer = new Server(
     { name: 'whatsapp-bridge', version: '1.0.0' },
     { capabilities: { tools: {} } }
@@ -329,9 +315,19 @@ async function main() {
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
 
-  console.error('');
   console.error('[WhatsApp Bridge] MCP server ready');
-  console.error('');
+
+  // Start WhatsApp connection in background (don't block MCP)
+  whatsapp.connect().then(() => {
+    const status = whatsapp.getAuthStatus();
+    if (status.connected) {
+      console.error(`[WhatsApp Bridge] Connected as +${status.phoneNumber}`);
+    } else {
+      console.error('[WhatsApp Bridge] Use show_qr_code tool to authenticate');
+    }
+  }).catch((error) => {
+    console.error('[WhatsApp Bridge] Connection pending - use show_qr_code to authenticate');
+  });
 
   // Graceful shutdown
   const shutdown = async () => {
