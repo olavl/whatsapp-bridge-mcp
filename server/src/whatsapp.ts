@@ -13,6 +13,7 @@ import makeWASocket, {
   type BaileysEventMap,
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
@@ -406,71 +407,75 @@ export class WhatsAppManager {
         return;
       }
 
-      // Generate QR code as HTML using Unicode blocks
-      let qrHtml = '';
-      qrcode.generate(this.currentQR, { small: true }, (qr: string) => {
-        qrHtml = qr;
-      });
+      // Generate QR code as SVG
+      QRCode.toString(this.currentQR, { type: 'svg', width: 300 }, (err: Error | null, svg: string) => {
+        if (err) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Error generating QR code');
+          return;
+        }
 
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>WhatsApp Bridge - Scan QR</title>
-          <meta http-equiv="refresh" content="5">
-          <style>
-            body {
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              height: 100vh;
-              font-family: system-ui;
-              background: #f0f0f0;
-              margin: 0;
-            }
-            .container {
-              background: white;
-              padding: 40px;
-              border-radius: 16px;
-              box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-              text-align: center;
-            }
-            h1 { color: #25D366; margin-bottom: 10px; }
-            pre {
-              background: white;
-              padding: 20px;
-              font-size: 8px;
-              line-height: 1;
-              letter-spacing: 0;
-            }
-            .instructions {
-              margin-top: 20px;
-              color: #666;
-            }
-            .instructions ol {
-              text-align: left;
-              display: inline-block;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>WhatsApp Bridge</h1>
-            <p>Scan this QR code with WhatsApp</p>
-            <pre>${qrHtml.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
-            <div class="instructions">
-              <ol>
-                <li>Open WhatsApp on your phone</li>
-                <li>Go to Settings → Linked Devices</li>
-                <li>Tap "Link a Device"</li>
-                <li>Scan this QR code</li>
-              </ol>
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>WhatsApp Bridge - Scan QR</title>
+            <meta http-equiv="refresh" content="10">
+            <style>
+              body {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                font-family: system-ui;
+                background: #f0f0f0;
+                margin: 0;
+              }
+              .container {
+                background: white;
+                padding: 40px;
+                border-radius: 16px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+                text-align: center;
+              }
+              h1 { color: #25D366; margin-bottom: 10px; }
+              .qr-code {
+                padding: 20px;
+                background: white;
+              }
+              .qr-code svg {
+                width: 300px;
+                height: 300px;
+              }
+              .instructions {
+                margin-top: 20px;
+                color: #666;
+              }
+              .instructions ol {
+                text-align: left;
+                display: inline-block;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>WhatsApp Bridge</h1>
+              <p>Scan this QR code with WhatsApp</p>
+              <div class="qr-code">${svg}</div>
+              <div class="instructions">
+                <ol>
+                  <li>Open WhatsApp on your phone</li>
+                  <li>Go to Settings → Linked Devices</li>
+                  <li>Tap "Link a Device"</li>
+                  <li>Scan this QR code</li>
+                </ol>
+              </div>
             </div>
-          </div>
-        </body>
-        </html>
-      `);
+          </body>
+          </html>
+        `);
+      });
     });
 
     await new Promise<void>((resolve, reject) => {
